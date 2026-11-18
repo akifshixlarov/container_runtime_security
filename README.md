@@ -1,6 +1,6 @@
 # Kubernetes Container Runtime Security Lab: Falco Detection, Tetragon Enforcement & DefectDojo Vulnerability Management
 
-[![Runtime Security CI](https://github.com/<your-username>/container-runtime-security/actions/workflows/ci.yml/badge.svg)](https://github.com/<your-username>/container-runtime-security/actions)
+[![Runtime Security CI](https://github.com/akifshixlarov/container_runtime_security/actions/workflows/ci.yml/badge.svg)](https://github.com/akifshixlarov/container_runtime_security/actions)
 ![Kubernetes](https://img.shields.io/badge/Kubernetes-v1.31.2-blue?logo=kubernetes)
 ![eBPF](https://img.shields.io/badge/Driver-eBPF-orange)
 ![Tetragon](https://img.shields.io/badge/Enforcement-Cilium_Tetragon-green)
