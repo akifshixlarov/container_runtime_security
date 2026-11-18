@@ -62,13 +62,10 @@ jobs:
           sleep 5
           kubectl get tracingpolicy
 
-      - name: Install Trivy & Run Container Vulnerability Scan
-        uses: aquasecurity/trivy-action@v0.29.0
-        with:
-          image-ref: 'nginx:alpine'
-          format: 'json'
-          output: 'reports/trivy-nginx-report.json'
-          severity: 'CRITICAL,HIGH,MEDIUM'
+      - name: Run Container Vulnerability Scan (Trivy)
+        run: |
+          chmod +x scripts/scan-images.sh
+          ./scripts/scan-images.sh nginx:alpine reports/trivy-nginx-report.json
 
       - name: Run Automated Runtime Security Regression Suite
         run: |
