@@ -213,9 +213,11 @@ docker exec runtime-security-lab-control-plane mount -t bpf bpf /sys/fs/bpf
 helm repo add cilium https://helm.cilium.io
 helm repo update
 
-# Install Tetragon DaemonSet
+# Install Tetragon DaemonSet (pinned to stable v1.7.1)
 helm upgrade --install tetragon cilium/tetragon `
+  --version 1.7.1 `
   --namespace kube-system `
+  --set crds.installMethod=helm `
   -f tetragon/values.yaml
 
 # Wait for Tetragon readiness

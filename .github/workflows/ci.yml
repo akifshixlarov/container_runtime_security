@@ -52,6 +52,7 @@ jobs:
           helm repo add cilium https://helm.cilium.io
           helm repo update cilium
           helm upgrade --install tetragon cilium/tetragon \
+            --version 1.7.1 \
             --namespace kube-system \
             --set crds.installMethod=helm \
             -f tetragon/values.yaml
