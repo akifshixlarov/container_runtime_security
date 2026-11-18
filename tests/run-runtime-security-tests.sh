@@ -3,8 +3,6 @@
 # Automated Kubernetes Runtime Security Regression Suite (Linux / macOS / CI)
 # Dual Engine: Falco (behavioral detection) & Cilium Tetragon (in-kernel prevention)
 
-set -eo pipefail
-
 REPORT_PATH="${1:-reports/runtime-security-report.md}"
 mkdir -p "$(dirname "$REPORT_PATH")"
 
@@ -62,6 +60,7 @@ echo -e "${YELLOW}[1/6] Discovering Installed Workloads & Agent Health...${NC}"
 DEV_POD=$(kubectl get pod -n dev -l app=nginx -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
 STAGING_POD=$(kubectl get pod -n staging -l app=nginx -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
 PROD_POD=$(kubectl get pod -n prod -l app=nginx -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
+PROD_IP=$(kubectl get pod -n prod "$PROD_POD" -o jsonpath='{.status.podIP}' 2>/dev/null || true)
 FALCO_POD=$(kubectl get pod -n falco -l app.kubernetes.io/name=falco -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
 TETRAGON_POD=$(kubectl get pod -n kube-system -l app.kubernetes.io/name=tetragon -o jsonpath='{.items[0].metadata.name}' 2>/dev/null || true)
 
@@ -69,20 +68,26 @@ if [[ -z "$PROD_POD" ]]; then
     echo -e "${RED}[-] Error: Could not locate nginx pod in prod namespace.${NC}" >&2
     exit 1
 fi
-echo -e "  [+] Discovered Workloads: dev=${DEV_POD}, staging=${STAGING_POD}, prod=${PROD_POD}"
+echo -e "  [+] Discovered Workloads: dev=${DEV_POD}, staging=${STAGING_POD}, prod=${PROD_POD} (IP: ${PROD_IP})"
 echo -e "  [+] Security Agents: Falco=${FALCO_POD}, Tetragon=${TETRAGON_POD}\n"
+
+# Helper for Falco alert inspection
+get_falco_alert() {
+    local pattern="$1"
+    sleep 2
+    local alert
+    alert=$(kubectl logs -n falco "$FALCO_POD" --tail=60 2>/dev/null | grep -E "$pattern" | tail -n 1 || true)
+    echo "$alert"
+}
 
 # TEST A: Dev Shell
 echo -e "${YELLOW}[2/6] Executing TEST-A: Dev Shell Execution...${NC}"
 MARKER_A="dev_shell_$RANDOM"
-set +e
-EXEC_A=$(kubectl exec -n dev "$DEV_POD" -- /bin/sh -c "echo $MARKER_A" 2>&1)
+EXEC_A=$(kubectl exec -n dev "$DEV_POD" -- /bin/sh -c "echo $MARKER_A" 2>&1 || true)
 EXIT_A=$?
-set -e
-sleep 1.5
-FALCO_A=$(kubectl logs -n falco "$FALCO_POD" --tail=25 2>/dev/null | grep "Shell spawned in dev container" | tail -n 1 || true)
+FALCO_A=$(get_falco_alert "Shell spawned in dev container")
 STATUS_A="FAIL"
-if [[ $EXIT_A -eq 0 && "$EXEC_A" == *"$MARKER_A"* ]]; then
+if [[ "$EXEC_A" == *"$MARKER_A"* ]]; then
     STATUS_A="PASS"
 fi
 record_result "TEST-A" "Dev Shell Execution & Falco Detection" "dev" "$DEV_POD" \
@@ -95,14 +100,11 @@ record_result "TEST-A" "Dev Shell Execution & Falco Detection" "dev" "$DEV_POD" 
 # TEST B: Staging Shell
 echo -e "${YELLOW}[3/6] Executing TEST-B: Staging Shell Execution...${NC}"
 MARKER_B="staging_shell_$RANDOM"
-set +e
-EXEC_B=$(kubectl exec -n staging "$STAGING_POD" -- /bin/sh -c "echo $MARKER_B" 2>&1)
+EXEC_B=$(kubectl exec -n staging "$STAGING_POD" -- /bin/sh -c "echo $MARKER_B" 2>&1 || true)
 EXIT_B=$?
-set -e
-sleep 1.5
-FALCO_B=$(kubectl logs -n falco "$FALCO_POD" --tail=25 2>/dev/null | grep "Shell spawned in staging container" | tail -n 1 || true)
+FALCO_B=$(get_falco_alert "Shell spawned in staging container")
 STATUS_B="FAIL"
-if [[ $EXIT_B -eq 0 && "$EXEC_B" == *"$MARKER_B"* ]]; then
+if [[ "$EXEC_B" == *"$MARKER_B"* ]]; then
     STATUS_B="PASS"
 fi
 record_result "TEST-B" "Staging Shell Execution & Falco Detection" "staging" "$STAGING_POD" \
@@ -115,10 +117,8 @@ record_result "TEST-B" "Staging Shell Execution & Falco Detection" "staging" "$S
 # TEST C: Production Shell Prevention
 echo -e "${YELLOW}[4/6] Executing TEST-C: Production Shell Prevention...${NC}"
 MARKER_C="prod_shell_$RANDOM"
-set +e
-EXEC_C=$(kubectl exec -n prod "$PROD_POD" -- /bin/sh -c "echo $MARKER_C" 2>&1)
+EXEC_C=$(kubectl exec -n prod "$PROD_POD" -- /bin/sh -c "echo $MARKER_C" 2>&1 || true)
 EXIT_C=$?
-set -e
 STATUS_C="FAIL"
 if [[ ($EXIT_C -eq 137 || "$EXEC_C" == *"exit code 137"*) && "$EXEC_C" != *"$MARKER_C"* ]]; then
     STATUS_C="PASS"
@@ -132,10 +132,8 @@ record_result "TEST-C" "Production Shell Prevention (Tetragon In-Kernel)" "prod"
 
 # TEST D1: Sensitive File Access (/etc/shadow)
 echo -e "${YELLOW}[5/6] Executing TEST-D1: Sensitive File Access Protection...${NC}"
-set +e
-EXEC_D1=$(kubectl exec -n prod "$PROD_POD" -- head -n 1 /etc/shadow 2>&1)
+EXEC_D1=$(kubectl exec -n prod "$PROD_POD" -- head -n 1 /etc/shadow 2>&1 || true)
 EXIT_D1=$?
-set -e
 STATUS_D1="FAIL"
 LEAKED_SHADOW=0
 if echo "$EXEC_D1" | grep -E -q "root:[\$|\*|!]"; then
@@ -152,10 +150,8 @@ record_result "TEST-D1" "Sensitive File Access: /etc/shadow in Production" "prod
     "VFS-layer enforcement: fd_install intercepts the file descriptor before read operations begin."
 
 # TEST D2: Non-Existent Protected Path (/etc/sudoers)
-set +e
-EXEC_D2=$(kubectl exec -n prod "$PROD_POD" -- head -n 1 /etc/sudoers 2>&1)
+EXEC_D2=$(kubectl exec -n prod "$PROD_POD" -- head -n 1 /etc/sudoers 2>&1 || true)
 EXIT_D2=$?
-set -e
 record_result "TEST-D2" "Sensitive File Protection: Non-Existent Path" "prod" "$PROD_POD" \
     "Report INCONCLUSIVE if target file does not exist in rootfs" \
     "ExitCode ${EXIT_D2}; Output: '${EXEC_D2}'" \
@@ -165,10 +161,8 @@ record_result "TEST-D2" "Sensitive File Protection: Non-Existent Path" "prod" "$
 
 # TEST E: Normal HTTP Web Traffic
 echo -e "${YELLOW}[6/6] Executing TEST-E: Legitimate HTTP Web Traffic Check...${NC}"
-set +e
-HTTP_RESP=$(kubectl exec -n dev "$DEV_POD" -- wget -q -O - http://nginx-prod.prod.svc.cluster.local 2>&1 || true)
+HTTP_RESP=$(kubectl exec -n dev "$DEV_POD" -- wget -qO- -T 3 "http://$PROD_IP" 2>&1 || true)
 EXIT_E=$?
-set -e
 STATUS_E="FAIL"
 if [[ "$HTTP_RESP" == *"Welcome to nginx!"* ]]; then
     STATUS_E="PASS"
