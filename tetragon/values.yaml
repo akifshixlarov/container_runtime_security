@@ -3,6 +3,10 @@
 # Environment: kind cluster (runtime-security-lab) on Docker Desktop with WSL2
 # Kernel: 6.6.87.2-microsoft-standard-WSL2 (eBPF + BTF enabled)
 
+# Ensure CRDs (tracingpolicies.cilium.io) are installed synchronously via Helm
+crds:
+  installMethod: "helm"
+
 # Tetragon daemon settings
 tetragon:
   # Enable JSON export file for Hubble / stdout streaming

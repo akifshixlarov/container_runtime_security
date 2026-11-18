@@ -41,8 +41,10 @@ install-tetragon:
 	helm repo update cilium
 	helm upgrade --install tetragon cilium/tetragon \
 		--namespace kube-system \
+		--set crds.installMethod=helm \
 		-f tetragon/values.yaml
 	kubectl rollout status -n kube-system ds/tetragon --timeout=90s
+	kubectl wait --for=condition=Established --timeout=60s crd/tracingpolicies.cilium.io
 
 policies:
 	kubectl apply -f tetragon/policies/
