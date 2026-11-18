@@ -1,0 +1,31 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: sec-test-runner
+  namespace: monitoring
+  labels:
+    app: sec-test-runner
+    security.lab/environment: monitoring
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: sec-test-runner
+      security.lab/environment: monitoring
+  template:
+    metadata:
+      labels:
+        app: sec-test-runner
+        security.lab/environment: monitoring
+    spec:
+      containers:
+      - name: test-runner
+        image: alpine:latest
+        command: ["/bin/sh", "-c", "sleep 365d"]
+        resources:
+          limits:
+            cpu: "100m"
+            memory: "64Mi"
+          requests:
+            cpu: "20m"
+            memory: "32Mi"

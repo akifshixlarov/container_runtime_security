@@ -1,0 +1,295 @@
+# values.yaml
+# Helm configuration for Falco DaemonSet in the Kubernetes Runtime Security Lab
+# Optimized for kind on WSL2 / Linux using modern eBPF driver and instant offline rule loading.
+# Falco Priority levels: EMERGENCY, ALERT, CRITICAL, ERROR, WARNING, NOTICE, INFORMATIONAL, DEBUG
+
+driver:
+  enabled: true
+  kind: modern_ebpf
+  modernEbpf:
+    leastPrivileged: false
+
+# Disable falcoctl remote artifact fetching to eliminate external network dependencies
+falcoctl:
+  artifact:
+    install:
+      enabled: false
+    follow:
+      enabled: false
+
+# Enable real-time unbuffered output to stdout for interactive log streaming
+tty: true
+
+falco:
+  buffered_outputs: false
+  time_format_iso_8601: true
+  json_output: false
+  stdout_output:
+    enabled: true
+  rules_files:
+    - /etc/falco/falco_rules.yaml
+    - /etc/falco/falco_rules.local.yaml
+    - /etc/falco/rules.d
+
+# Custom security rules mounted into /etc/falco/rules.d/custom-rules.yaml
+customRules:
+  custom-rules.yaml: |-
+    - list: security_lab_shell_binaries
+      items: [sh, bash, zsh, ksh, csh, tcsh, dash, ash]
+
+    - list: priv_escalation_binaries
+      items: [sudo, su, pkexec, doas]
+
+    - list: suspicious_tools
+      items: [nc, ncat, netcat, curl, wget, python, python3, perl, ruby, socat, nmap]
+
+    - list: reverse_shell_ports
+      items: [4444, 1337, 31337, 6667, 9001, 8080]
+
+    - macro: k8s_container
+      condition: (container and not container.id = host)
+
+    # 1. Namespace-specific Shell Execution: Production (CRITICAL)
+    - rule: Shell Spawned in Production Container
+      desc: Detects interactive shell execution inside production container workloads
+      condition: >
+        spawned_process and
+        k8s_container and
+        k8s.ns.name = "prod" and
+        proc.name in (security_lab_shell_binaries)
+      output: >
+        CRITICAL: Shell spawned in production container
+        (user=%user.name ns=%k8s.ns.name pod=%k8s.pod.name
+        container=%container.name process=%proc.name cmdline=%proc.cmdline parent=%proc.pname)
+      priority: CRITICAL
+      tags: [security_lab, namespace_prod, shell, mitre_execution]
+
+    # 2. Namespace-specific Shell Execution: Staging (WARNING)
+    - rule: Shell Spawned in Staging Container
+      desc: Detects shell execution inside staging container workloads
+      condition: >
+        spawned_process and
+        k8s_container and
+        k8s.ns.name = "staging" and
+        proc.name in (security_lab_shell_binaries)
+      output: >
+        WARNING: Shell spawned in staging container
+        (user=%user.name ns=%k8s.ns.name pod=%k8s.pod.name
+        container=%container.name process=%proc.name cmdline=%proc.cmdline)
+      priority: WARNING
+      tags: [security_lab, namespace_staging, shell]
+
+    # 3. Namespace-specific Shell Execution: Development (NOTICE)
+    - rule: Shell Spawned in Development Container
+      desc: Detects shell execution inside dev container workloads (allowed for development)
+      condition: >
+        spawned_process and
+        k8s_container and
+        k8s.ns.name = "dev" and
+        proc.name in (security_lab_shell_binaries)
+      output: >
+        NOTICE: Shell spawned in dev container for development/testing
+        (user=%user.name ns=%k8s.ns.name pod=%k8s.pod.name
+        container=%container.name process=%proc.name cmdline=%proc.cmdline)
+      priority: NOTICE
+      tags: [security_lab, namespace_dev, shell]
+
+    # 4. Sensitive Credential File Access: Production (CRITICAL)
+    - rule: Sensitive Credential File Access in Production Container
+      desc: Detects access to /etc/shadow, /etc/sudoers, or SSH keys in production
+      condition: >
+        open_read and
+        k8s_container and
+        k8s.ns.name = "prod" and
+        (fd.name in ("/etc/shadow", "/etc/sudoers", "/etc/security/opasswd") or
+         fd.directory in ("/root/.ssh", "/etc/sudoers.d", "/etc/ssl/private") or
+         fd.name startswith "/root/.ssh/")
+      output: >
+        CRITICAL: Sensitive credential file accessed in production container
+        (user=%user.name ns=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        file=%fd.name proc=%proc.name cmdline=%proc.cmdline)
+      priority: CRITICAL
+      tags: [security_lab, namespace_prod, file, credentials]
+
+    # 5. Sensitive Credential File Access: Non-Production (WARNING)
+    - rule: Sensitive Credential File Access in Non-Production Container
+      desc: Detects access to /etc/shadow or /etc/sudoers in non-production containers
+      condition: >
+        open_read and
+        k8s_container and
+        k8s.ns.name != "prod" and
+        (fd.name in ("/etc/shadow", "/etc/sudoers", "/etc/security/opasswd") or
+         fd.directory in ("/root/.ssh", "/etc/sudoers.d", "/etc/ssl/private") or
+         fd.name startswith "/root/.ssh/")
+      output: >
+        WARNING: Sensitive credential file accessed in non-production container
+        (user=%user.name ns=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        file=%fd.name proc=%proc.name cmdline=%proc.cmdline)
+      priority: WARNING
+      tags: [security_lab, file, credentials]
+
+    # 6. /etc/passwd Access: Production (ERROR / High)
+    - rule: Read Passwd File in Production Container
+      desc: Detects enumeration of /etc/passwd in production workloads
+      condition: >
+        open_read and
+        k8s_container and
+        k8s.ns.name = "prod" and
+        fd.name = "/etc/passwd" and
+        not proc.name in (nginx)
+      output: >
+        ERROR: User enumeration attempt: /etc/passwd read in production container
+        (user=%user.name ns=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        file=%fd.name proc=%proc.name cmdline=%proc.cmdline)
+      priority: ERROR
+      tags: [security_lab, namespace_prod, file, discovery]
+
+    # 7. /etc/passwd Access: Non-Production (NOTICE)
+    - rule: Read Passwd File in Non-Production Container
+      desc: Detects reading /etc/passwd in staging/dev workloads
+      condition: >
+        open_read and
+        k8s_container and
+        k8s.ns.name != "prod" and
+        fd.name = "/etc/passwd" and
+        not proc.name in (nginx)
+      output: >
+        NOTICE: User enumeration: /etc/passwd read in non-production container
+        (user=%user.name ns=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        file=%fd.name proc=%proc.name cmdline=%proc.cmdline)
+      priority: NOTICE
+      tags: [security_lab, file, discovery]
+
+    # 8. Privilege Escalation Tools (ERROR / High)
+    - rule: Privilege Escalation Utility Executed in Container
+      desc: Detects attempts to run sudo, su, or pkexec inside containers
+      condition: >
+        spawned_process and
+        k8s_container and
+        (proc.name in (priv_escalation_binaries) or proc.pname in (priv_escalation_binaries))
+      output: >
+        ERROR: Privilege escalation binary invoked inside container
+        (user=%user.name ns=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        proc=%proc.name cmdline=%proc.cmdline parent=%proc.pname)
+      priority: ERROR
+      tags: [security_lab, privilege_escalation]
+
+    # 9. Setuid Syscalls (ERROR / High)
+    - rule: Suspicious Setuid or Setgid Execution in Container
+      desc: Detects attempts to elevate privileges via setuid/setgid syscalls
+      condition: >
+        k8s_container and
+        (evt.type in (setuid, setgid, setresuid, setresgid) and evt.res = 0) and
+        user.uid != 0
+      output: >
+        ERROR: Non-root process called setuid/setgid to alter UID/GID
+        (user=%user.name ns=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        proc=%proc.name cmdline=%proc.cmdline syscall=%evt.type res=%evt.res)
+      priority: ERROR
+      tags: [security_lab, privilege_escalation]
+
+    # 10. Process Monitoring: Production Network/Recon Tools (ERROR / High)
+    - rule: Suspicious Process Spawned in Production Container
+      desc: Detects network tools (nc, curl, wget, python) in production container
+      condition: >
+        spawned_process and
+        k8s_container and
+        k8s.ns.name = "prod" and
+        proc.name in (suspicious_tools)
+      output: >
+        ERROR: Suspicious administrative/network tool executed in production container
+        (user=%user.name ns=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        proc=%proc.name cmdline=%proc.cmdline parent=%proc.pname)
+      priority: ERROR
+      tags: [security_lab, namespace_prod, process_monitoring]
+
+    # 11. Process Monitoring: Staging Tools (WARNING)
+    - rule: Suspicious Process Spawned in Staging Container
+      desc: Detects network/recon tools in staging container
+      condition: >
+        spawned_process and
+        k8s_container and
+        k8s.ns.name = "staging" and
+        proc.name in (suspicious_tools)
+      output: >
+        WARNING: Administrative tool executed in staging container
+        (user=%user.name ns=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        proc=%proc.name cmdline=%proc.cmdline)
+      priority: WARNING
+      tags: [security_lab, namespace_staging, process_monitoring]
+
+    # 12. Network: Reverse Shell Port Connection (CRITICAL)
+    - rule: Suspicious Outbound Connection to High-Risk Port
+      desc: Detects container connection to typical reverse shell ports
+      condition: >
+        (evt.type = connect and evt.res >= 0) and
+        k8s_container and
+        fd.l4proto = tcp and
+        fd.rport in (reverse_shell_ports)
+      output: >
+        CRITICAL: Container connected to high-risk reverse shell port
+        (user=%user.name ns=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        proc=%proc.name cmdline=%proc.cmdline dip=%fd.rip dport=%fd.rport sip=%fd.lip sport=%fd.lport)
+      priority: CRITICAL
+      tags: [security_lab, network, reverse_shell]
+
+    # 13. Network: Netcat Usage (ERROR / High)
+    - rule: Netcat Network Activity in Container
+      desc: Detects netcat socket connection or listener creation
+      condition: >
+        (evt.type in (connect, listen, accept)) and
+        k8s_container and
+        proc.name in (nc, ncat, netcat)
+      output: >
+        ERROR: Netcat network activity detected in container
+        (user=%user.name ns=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        proc=%proc.name cmdline=%proc.cmdline dip=%fd.rip dport=%fd.rport sport=%fd.lport)
+      priority: ERROR
+      tags: [security_lab, network, netcat]
+
+    # 14. Kubernetes: Service Account Token in Production (CRITICAL)
+    - rule: Workload Accessed Service Account Credentials in Production
+      desc: Detects reading mounted service account token in production workload
+      condition: >
+        open_read and
+        k8s_container and
+        k8s.ns.name = "prod" and
+        fd.name startswith "/var/run/secrets/kubernetes.io/serviceaccount/token"
+      output: >
+        CRITICAL: Workload accessed Kubernetes Service Account token in production
+        (user=%user.name ns=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        file=%fd.name proc=%proc.name cmdline=%proc.cmdline)
+      priority: CRITICAL
+      tags: [security_lab, namespace_prod, k8s, credentials]
+
+    # 15. Kubernetes: Service Account Token in Non-Production (WARNING)
+    - rule: Workload Accessed Service Account Credentials in Non-Production
+      desc: Detects reading mounted service account token in staging/dev workload
+      condition: >
+        open_read and
+        k8s_container and
+        k8s.ns.name != "prod" and
+        k8s.ns.name != "kube-system" and
+        fd.name startswith "/var/run/secrets/kubernetes.io/serviceaccount/token"
+      output: >
+        WARNING: Workload accessed Kubernetes Service Account token in non-production
+        (user=%user.name ns=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        file=%fd.name proc=%proc.name cmdline=%proc.cmdline)
+      priority: WARNING
+      tags: [security_lab, k8s, credentials]
+
+    # 16. Kubernetes: Direct Workload API Access (ERROR / High)
+    - rule: Workload Connection to Kubernetes API Server
+      desc: Detects direct TCP connection from application workload to Kubernetes API
+      condition: >
+        (evt.type = connect and evt.res >= 0) and
+        k8s_container and
+        k8s.ns.name = "prod" and
+        fd.rport in (443, 6443, 8443) and
+        (fd.rip = "10.96.0.1" or fd.name contains ":443" or fd.name contains ":6443")
+      output: >
+        ERROR: Production workload opened direct connection to Kubernetes API Server
+        (user=%user.name ns=%k8s.ns.name pod=%k8s.pod.name container=%container.name
+        proc=%proc.name cmdline=%proc.cmdline dip=%fd.rip dport=%fd.rport sport=%fd.lport)
+      priority: ERROR
+      tags: [security_lab, namespace_prod, k8s, api]

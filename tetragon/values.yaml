@@ -1,0 +1,26 @@
+# values.yaml
+# Helm configuration for Cilium Tetragon in Kubernetes Runtime Security Lab
+# Environment: kind cluster (runtime-security-lab) on Docker Desktop with WSL2
+# Kernel: 6.6.87.2-microsoft-standard-WSL2 (eBPF + BTF enabled)
+
+# Tetragon daemon settings
+tetragon:
+  # Enable JSON export file for Hubble / stdout streaming
+  exportFilename: "tetragon.log"
+  exportFileMaxSizeMB: 10
+  exportFileMaxBackups: 5
+
+  # Export allow list covers process lifecycle and kernel hook events
+  exportAllowList: |-
+    {"event_set":["PROCESS_EXEC", "PROCESS_EXIT", "PROCESS_KPROBE", "PROCESS_UPROBE", "PROCESS_TRACEPOINT", "PROCESS_LSM"]}
+
+  # Deny list to reduce noise from internal system namespaces
+  exportDenyList: |-
+    {"health_check":true}
+    {"namespace":["", "cilium", "kube-system"]}
+
+# Mount debugfs to ensure kernel tracing probes have access to debugfs tracepoints
+extraHostPathMounts:
+  - name: sys-kernel-debug
+    mountPath: /sys/kernel/debug
+    hostPath: /sys/kernel/debug

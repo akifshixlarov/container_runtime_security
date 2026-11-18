@@ -1,0 +1,46 @@
+# 02-prod-protect-sensitive-files.yaml
+# Tetragon TracingPolicy: Protect Sensitive Files & Credentials in Production Workloads
+# Intercepts file installation in VFS and terminates violating processes targeting protected paths.
+
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: prod-protect-sensitive-files
+  labels:
+    security.lab/environment: prod
+    security.lab/tier: runtime-enforcement
+spec:
+  # Scope policy strictly to production workloads
+  podSelector:
+    matchLabels:
+      app: nginx
+    matchExpressions:
+      - key: "k8s:io.kubernetes.pod.namespace"
+        operator: In
+        values:
+          - "prod"
+  kprobes:
+    # fd_install hooks the kernel point where struct file* is linked to the process descriptor table.
+    # The 'file' type resolves the canonical path, mitigating relative path bypasses.
+    - call: "fd_install"
+      syscall: false
+      args:
+        - index: 0
+          type: "int"
+        - index: 1
+          type: "file"
+      selectors:
+        - matchArgs:
+            - index: 1
+              operator: "Prefix"
+              values:
+                - "/etc/shadow"
+                - "/etc/sudoers"
+                - "/root/.ssh"
+                - "/run/secrets/kubernetes.io/serviceaccount"
+                - "/var/run/secrets/kubernetes.io/serviceaccount"
+          matchActions:
+            # Synchronously terminate the violating process with SIGKILL before file I/O begins.
+            # NOTE: Override action (-EPERM via bpf_override_return) requires CONFIG_BPF_KPROBE_OVERRIDE,
+            # which is not enabled in the WSL2 kernel. Sigkill provides guaranteed prevention.
+            - action: Sigkill

@@ -1,0 +1,53 @@
+# 03-prod-block-network-tools.yaml
+# Tetragon TracingPolicy: Block Network & Administrative Reconnaissance Tools in Production Workloads
+# Enforces prevention against netcat/network utility execution while preserving normal web server traffic.
+
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: prod-block-network-tools
+  labels:
+    security.lab/environment: prod
+    security.lab/tier: runtime-enforcement
+spec:
+  # Scope policy strictly to production workloads
+  podSelector:
+    matchLabels:
+      app: nginx
+    matchExpressions:
+      - key: "k8s:io.kubernetes.pod.namespace"
+        operator: In
+        values:
+          - "prod"
+  kprobes:
+    # Hook sys_execve to prevent invocation of suspicious networking binaries
+    - call: "sys_execve"
+      syscall: true
+      args:
+        - index: 0
+          type: "string"
+      selectors:
+        - matchArgs:
+            - index: 0
+              operator: "Postfix"
+              values:
+                - "/nc"
+                - "/netcat"
+                - "/ncat"
+                - "/socat"
+          matchActions:
+            - action: Sigkill
+        - matchArgs:
+            - index: 0
+              operator: "Equal"
+              values:
+                - "/usr/bin/nc"
+                - "/bin/nc"
+                - "/usr/bin/netcat"
+                - "/bin/netcat"
+                - "/usr/bin/ncat"
+                - "/bin/ncat"
+                - "/usr/bin/socat"
+                - "/bin/socat"
+          matchActions:
+            - action: Sigkill

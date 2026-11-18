@@ -1,0 +1,21 @@
+# Secrets and Environment Variables
+.env
+*.token
+*.key
+*.pem
+credentials/
+
+# Binaries
+kind.exe
+*.exe
+
+# Reports (ignore heavy/ephemeral JSON scan reports while preserving documentation)
+reports/*.json
+!reports/.gitkeep
+!reports/*.md
+
+# PowerShell / OS temporary files
+*.tmp
+*.log
+.DS_Store
+Thumbs.db

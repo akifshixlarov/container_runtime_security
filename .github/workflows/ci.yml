@@ -1,0 +1,84 @@
+name: Runtime Security CI
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  validate-runtime-security:
+    name: KinD eBPF Runtime Security & Vulnerability Scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout Repository
+        uses: actions/checkout@v4
+
+      - name: Set up Kubernetes KinD
+        uses: helm/kind-action@v1.12.0
+        with:
+          config: cluster/kind-config.yaml
+          cluster_name: runtime-security-lab
+          wait: 120s
+
+      - name: Prepare Host eBPF Filesystem
+        run: |
+          docker exec runtime-security-lab-control-plane mount -t bpf bpf /sys/fs/bpf || true
+          docker exec runtime-security-lab-control-plane ls -la /sys/fs/bpf
+
+      - name: Deploy Workloads & Namespaces
+        run: |
+          kubectl apply -f namespaces/namespaces.yaml
+          kubectl apply -f workloads/
+          kubectl rollout status -n prod deployment/nginx-prod --timeout=90s
+          kubectl rollout status -n staging deployment/nginx-staging --timeout=90s
+          kubectl rollout status -n dev deployment/nginx-dev --timeout=90s
+
+      - name: Install Falco (Detection Engine)
+        run: |
+          helm repo add falcosecurity https://falcosecurity.github.io/charts
+          helm repo update falcosecurity
+          helm upgrade --install falco falcosecurity/falco \
+            --namespace falco \
+            --create-namespace \
+            -f falco/values.yaml
+          kubectl rollout status -n falco ds/falco --timeout=120s || kubectl get pods -n falco
+
+      - name: Install Cilium Tetragon (Enforcement Engine)
+        run: |
+          helm repo add cilium https://helm.cilium.io
+          helm repo update cilium
+          helm upgrade --install tetragon cilium/tetragon \
+            --namespace kube-system \
+            -f tetragon/values.yaml
+          kubectl rollout status -n kube-system ds/tetragon --timeout=120s
+
+      - name: Apply Tetragon TracingPolicies
+        run: |
+          kubectl apply -f tetragon/policies/
+          sleep 5
+          kubectl get tracingpolicy
+
+      - name: Install Trivy & Run Container Vulnerability Scan
+        uses: aquasecurity/trivy-action@0.29.0
+        with:
+          image-ref: 'nginx:alpine'
+          format: 'json'
+          output: 'reports/trivy-nginx-report.json'
+          severity: 'CRITICAL,HIGH,MEDIUM'
+
+      - name: Run Automated Runtime Security Regression Suite
+        run: |
+          chmod +x tests/run-runtime-security-tests.sh
+          ./tests/run-runtime-security-tests.sh reports/runtime-security-report.md
+
+      - name: Upload Security Reports as Artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: runtime-security-validation-reports
+          path: reports/
+          retention-days: 14

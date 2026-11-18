@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-staging
+  namespace: staging
+  labels:
+    app: nginx
+    security.lab/environment: staging
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx
+      security.lab/environment: staging
+  template:
+    metadata:
+      labels:
+        app: nginx
+        security.lab/environment: staging
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+        resources:
+          limits:
+            cpu: "200m"
+            memory: "128Mi"
+          requests:
+            cpu: "50m"
+            memory: "64Mi"

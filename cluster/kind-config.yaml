@@ -1,0 +1,24 @@
+# kind-config.yaml
+# Kind cluster configuration for Kubernetes Runtime Security Lab
+# Cluster name: runtime-security-lab
+# Uses stable Kubernetes v1.31.2 node image with modern eBPF and syscall support
+kind: Cluster
+apiVersion: kind.x-k8s.io/v1alpha4
+name: runtime-security-lab
+nodes:
+- role: control-plane
+  image: kindest/node:v1.31.2
+  extraMounts:
+  - hostPath: /dev
+    containerPath: /dev
+  - hostPath: /sys/kernel/debug
+    containerPath: /sys/kernel/debug
+  - hostPath: /etc
+    containerPath: /host/etc
+    readOnly: true
+  - hostPath: /proc
+    containerPath: /host/proc
+    readOnly: true
+  - hostPath: /usr
+    containerPath: /host/usr
+    readOnly: true

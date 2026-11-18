@@ -1,0 +1,66 @@
+# 04-prod-privilege-escalation.yaml
+# Tetragon TracingPolicy: Detect & Prevent Privilege Escalation in Production Workloads
+# Combines active kernel enforcement against elevation binaries with observability on credential changes.
+
+apiVersion: cilium.io/v1alpha1
+kind: TracingPolicy
+metadata:
+  name: prod-privilege-escalation
+  labels:
+    security.lab/environment: prod
+    security.lab/tier: runtime-enforcement
+spec:
+  # Scope policy strictly to production workloads
+  podSelector:
+    matchLabels:
+      app: nginx
+    matchExpressions:
+      - key: "k8s:io.kubernetes.pod.namespace"
+        operator: In
+        values:
+          - "prod"
+  kprobes:
+    # 1. ENFORCEMENT HOOK: Terminate execution of privilege escalation utilities
+    - call: "sys_execve"
+      syscall: true
+      args:
+        - index: 0
+          type: "string"
+      selectors:
+        - matchArgs:
+            - index: 0
+              operator: "Postfix"
+              values:
+                - "/su"
+                - "/sudo"
+                - "/pkexec"
+                - "/doas"
+          matchActions:
+            # Prevent the elevation process from spawning
+            - action: Sigkill
+        - matchArgs:
+            - index: 0
+              operator: "Equal"
+              values:
+                - "/bin/su"
+                - "/usr/bin/su"
+                - "/usr/bin/sudo"
+                - "/usr/bin/pkexec"
+                - "/usr/bin/doas"
+          matchActions:
+            - action: Sigkill
+
+    # 2. OBSERVABILITY HOOK: Telemetry on UID/GID credential changes
+    # Kept as observation-only (action: Post) to avoid breaking standard multi-threaded/daemon user drops
+    - call: "sys_setresuid"
+      syscall: true
+      args:
+        - index: 0
+          type: "int"
+        - index: 1
+          type: "int"
+        - index: 2
+          type: "int"
+      selectors:
+        - matchActions:
+            - action: Post

@@ -1,0 +1,33 @@
+# namespaces.yaml
+# Declares isolated Kubernetes namespaces with environment security labels
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dev
+  labels:
+    security.lab/environment: dev
+    environment: dev
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: staging
+  labels:
+    security.lab/environment: staging
+    environment: staging
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: prod
+  labels:
+    security.lab/environment: prod
+    environment: prod
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: monitoring
+  labels:
+    security.lab/environment: monitoring
+    environment: monitoring

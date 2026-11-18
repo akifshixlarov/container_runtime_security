@@ -1,0 +1,32 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: nginx-prod
+  namespace: prod
+  labels:
+    app: nginx
+    security.lab/environment: prod
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: nginx
+      security.lab/environment: prod
+  template:
+    metadata:
+      labels:
+        app: nginx
+        security.lab/environment: prod
+    spec:
+      containers:
+      - name: nginx
+        image: nginx:alpine
+        ports:
+        - containerPort: 80
+        resources:
+          limits:
+            cpu: "200m"
+            memory: "128Mi"
+          requests:
+            cpu: "50m"
+            memory: "64Mi"
